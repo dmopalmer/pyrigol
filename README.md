@@ -12,11 +12,17 @@ Sample usage:
 from rigol import Oscilloscope
 import matplotlib.pyplot as plt
 from time import sleep
-imp[ort numpy as np
+import numpy as np
 
 # I don't have Oscilloscope() working, so use its factory method. 
 scope = Oscilloscope.getscope() 
 # The argument libkey='@py' uses pyvisa-py, which doesn't seem to work very well with my code
+
+# Use only Channel 1 on max gain
+scope.channel([2,3,4], display=0)
+scope.channel(1, display=1, scale=0.01, probe='10', units='volt')
+# print out the current settings:
+print(scope.channel([1,2,3,4],allparams=True))
 
 # Get 12M points at 10 MS/s (1.2 seconds.  Multiply timescale=0.1 by 12 grid squares to get length)
 scope.set(depth=12000000, timescale=0.1)
@@ -29,7 +35,7 @@ if scope.status() != 'STOP':
 scope.stop()
 # get_wave returns columns for time and all displayed channels.
 # If you don't use raw, it gives you time in seconds and signals in whatever the vertical scale is.
-# This can take a while.  The screen will flash
+# This can take 10s of seconds.  The screen will flash 'Can operate now!' every time it gets a chunk
 wave = scope.get_wave(raw=True)[:,1]
 # Let's see what the frequency content is
 wave = wave - wave.mean()   # stomp on the DC offset
@@ -55,3 +61,15 @@ https://github.com/pklaus/ds1054z  Screen grabber.
 https://github.com/wd5gnr/qrigol  Control program (complete GUI written in QT):
 
 https://github.com/dstahlke/rigol_long_mem   Grab a waveform
+
+
+# https://gist.githubusercontent.com/shirriff/bb010c7dbd7f0ce69cba/raw/15232c45aa4c7d75f4a16f09f8a98aaed235fae5/rigol-plt.py
+
+Download data from a Rigol DS1052E oscilloscope and graph with matplotlib.
+By Ken Shirriff, http://righto.com/rigol
+
+Based on http://www.cibomahto.com/2010/04/controlling-a-rigol-oscilloscope-using-linux-and-python/
+by Cibo Mahto.
+
+Also:
+https://github.com/dstahlke/rigol_long_mem/blob/master/rigol.py
