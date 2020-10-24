@@ -18,7 +18,8 @@ class Oscilloscope(pyvisa.resources.usb.USBInstrument):
     allchans = list(range(1, 5))  # 1..4
     channelparams = "BWLimit,COUPling,DISPlay,INVert,OFFSet,RANGe,TCAL,SCALe,PROBe,UNITs,VERNier".split(",")
     headersize = 11
-    chunkpoints = 250000  # 250000   # Up to 250,000 , but that times out
+    chunkpoints = 250000  # Up to 250,000
+    confirm_wave = False    # Read the block twice
 
     def _get_wave_parameters(self, channel):
         self.write(f":WAV:SOUR CHAN{channel}")
@@ -124,7 +125,7 @@ class Oscilloscope(pyvisa.resources.usb.USBInstrument):
             return setup
         else:
             setupblock = bytes(f"#9{len(setup):09d}", 'utf-8')+setup
-            self.write_raw(b":SYSTem:SETup "+setupblock)
+            self.write_binary_values(b":SYSTem:SETup "+setupblock, dtype='B')
 
     def set(self, all=False, **kwargs):
         """
@@ -211,21 +212,31 @@ class Oscilloscope(pyvisa.resources.usb.USBInstrument):
             # Read chunk by chunk
             data = []
             for istart in range(irange[0], irange[1], self.chunkpoints):
-                self.write(f":WAV:STAR {istart + 1}")
-                iend = min(istart + self.chunkpoints, irange[1])
-                self.write(f":WAV:STOP {iend}")
-                try:
-                    self.write(":WAV:DATA?")
-                    rawdata = self.read_rawblock()
-                    if len(rawdata) != (iend - istart):
-                        raise RuntimeError("Not correct number of bytes")
-                    data.extend(rawdata)
-                    # rawdata = self.query_binary_values(f":WAV:DATA?", datatype='B', header_fmt='empty',
-                    #                                    data_points=iend - istart + self.headersize)
-                    # data.extend(rawdata[self.headersize:])
-                except Exception as e:
-                    print(e)
-                    pass
+                while True:
+                    self.write(f":WAV:STAR {istart + 1}")
+                    iend = min(istart + self.chunkpoints, irange[1])
+                    self.write(f":WAV:STOP {iend}")
+                    try:
+                        self.write(":WAV:DATA?")
+                        sleep(0.1)
+                        rawdata = self.read_rawblock()
+                        if len(rawdata) != (iend - istart):
+                            raise RuntimeError("Not correct number of bytes")
+                        if self.confirm_wave:
+                            self.write(f":WAV:STAR {istart + 1}")
+                            sleep(0.1)
+                            self.write(f":WAV:STOP {iend} :WAV:DATA?")
+                            sleep(0.1)
+                            self.write(f":WAV:DATA?")
+                            sleep(0.1)
+                            rawdata2 = self.read_rawblock()
+                            if rawdata2 != rawdata:
+                                raise RuntimeError(f"Bad wave read for block {(istart - irange[0])//self.chunk_size}")
+                        data.extend(rawdata)
+                        break  # Successful read, confirmed if that is set
+                    except Exception as e:
+                        print(e)
+                        pass
             if raw:
                 result.append(data)
             else:
@@ -270,20 +281,30 @@ class Oscilloscope(pyvisa.resources.usb.USBInstrument):
         Where # is '#', N is '0'..'9', XXXX...XXX is the N digit number of bytes, and BB.. is the bytes
         :return: the bytes
         """
-        bytesin = self.read_raw()
+        # bytesin = self.read_raw()
+        bytesin = self.read_bytes(11)
         if len(bytesin) < 2 or bytesin[0:1] != b'#' or not b'0' <= bytesin[1:2] <= b'9':
             raise RuntimeError("Header not found")
         n_digits = int(bytesin[1:2])
         n_bytes, data = int(bytesin[2:2 + n_digits]), bytesin[2 + n_digits:]
         while len(data) < n_bytes:
             try:
-                data += self.read_raw()
+                # data += self.read_raw()
+                data += self.read_bytes(n_bytes - len(data))
             except pyvisa.errors.VisaIOError as e:
                 sleep(max(self.query_delay, 0.01))
-                data += self.read_raw()
+                # data += self.read_raw()
+                data += self.read_bytes(n_bytes - len(data))
         if len(data) > n_bytes:
             # The RigolDS1054z scope likes to append byte(10) = \n even to byte data
             data = data[:n_bytes]
+        else:
+            try:
+                moredata = self.read_raw()
+                if len(moredata) > 0 and moredata[0:1] != b'\n':
+                    raise RuntimeError("Unexpected bytes in block")
+            except pyvisa.errors.VI_ERROR_TMO as e:
+                pass
         return data
 
     @classmethod
@@ -296,5 +317,5 @@ class Oscilloscope(pyvisa.resources.usb.USBInstrument):
             sys.exit(-1)
         # timeout in ms, query_delay in s
         scope = rm.open_resource(instruments[0], resource_pyclass=cls, timeout=2000, chunk_size=1024000,
-                                 query_delay=0.2)  # bigger timeout for long mem
+                                 query_delay=0.4)  # bigger timeout for long mem
         return scope
